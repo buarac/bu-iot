@@ -105,6 +105,42 @@ void bu_espnow_print_head_data(bu_espnow_head_data_t *head) {
         ESP_LOG_BUFFER_HEXDUMP(TAG, head->payload, head->size, ESP_LOG_WARN);
 }
 
+esp_err_t bu_espnow_parse_head_data(bu_espnow_head_data_t *head) {
+    ESP_LOGV(TAG, "bu_espnow_parse_head_data");
+
+    esp_err_t ret = ESP_OK;
+
+/*
+typedef struct {
+    uint8_t     magic[BU_ESPNOW_MAGIC_LEN];
+    uint8_t     crc;
+    uint32_t    handle;
+    uint8_t     size;
+    uint8_t     seq;
+    uint8_t     payload[0];
+} __attribute__((packed)) bu_espnow_head_data_t;
+*/
+
+    if ( memcmp(head->magic, bu_magic, BU_ESPNOW_MAGIC_LEN) != 0 ) {
+        ESP_LOGE(TAG, "invalid magic number: found %x%x%x%x, expected %x%x%x%x", 
+            head->magic[0], head->magic[1], head->magic[2], head->magic[3] , 
+            bu_magic[0], bu_magic[1], bu_magic[2], bu_magic[3] 
+        );
+        ret = ESP_FAIL;
+        goto EXIT;
+    }
+
+    uint8_t crc = esp_crc8_le(UINT8_MAX, (uint8_t*)head->payload, head->size);
+    if ( crc != head->crc ) {
+        ESP_LOGE(TAG, "invalid crc: found %x, computed: %x", head->crc, crc);
+        ret = ESP_FAIL;
+        goto EXIT;
+    }
+
+EXIT:
+    return ret;
+}
+
 void bu_espnow_event_task(void *pvParameter) {
     ESP_LOGV(TAG, "bu_espnow_event_task");
 
@@ -114,7 +150,7 @@ void bu_espnow_event_task(void *pvParameter) {
         ESP_LOGW(TAG, ">>>>> New ESPNOW Event from "MACSTR"", MAC2STR(pEvt->addr));
 
         bu_espnow_head_data_t *head = (bu_espnow_head_data_t*)pEvt->data;
-
+        bu_espnow_parse_head_data(head);
         bu_espnow_print_head_data(head);
 
         free(pEvt);
@@ -141,6 +177,7 @@ esp_err_t bu_espnow_write(const uint8_t *dest_addr, const void *data, size_t siz
     head->size      = size;
     head->seq       = 0;
     head->crc       = esp_crc8_le(UINT8_MAX, (uint8_t*)data, size);
+    //head->crc       = 10;
     memcpy( head->payload, data, size);
 
     uint8_t *addr = dest_addr;
@@ -158,6 +195,7 @@ esp_err_t bu_espnow_write(const uint8_t *dest_addr, const void *data, size_t siz
     }
 
     EventBits_t uxBits = xEventGroupWaitBits(bu_espnow_event_group, BU_ESPNOW_SEND_CB_OK_BIT | BU_ESPNOW_SEND_CB_FAIL_BIT, pdTRUE, pdFALSE, portMAX_DELAY);
+    //ESP_LOGI(TAG, "uxBits = %d, 0b%b", uxBits, uxBits);
     if ((uxBits & BU_ESPNOW_SEND_CB_OK_BIT) != BU_ESPNOW_SEND_CB_OK_BIT) {
         ret = ESP_FAIL;
         ESP_LOGE(TAG, "Wait send ack fail");
